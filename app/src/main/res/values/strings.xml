@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">JARVEZ</string>
+    <string name="accessibility_service_description">JARVEZ Accessibility Service enables hands-free task automation for YouTube playback, WhatsApp messaging, and interactive system navigation on your explicit command.</string>
+    <string name="notification_channel_name">JARVEZ Assistant Service</string>
+    <string name="notification_channel_description">Persistent service for hands-free wake word listening and background task execution.</string>
+    <string name="notification_title">JARVEZ Active</string>
+    <string name="notification_text">Listening for commands and ready for automated tasks.</string>
+</resources>

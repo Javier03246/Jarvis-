@@ -1,0 +1,6 @@
+{
+  "name": "JARVEZ",
+  "description": "Real-time AI voice and system task automation assistant",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
