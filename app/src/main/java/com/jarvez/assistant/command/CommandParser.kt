@@ -21,6 +21,16 @@ object CommandParser {
     ): ParsedCommand {
         val text = normalizedText.trim()
 
+        // 0. Check for Task Cancellation commands (e.g. "stop", "cancel", "bas", "rok do", "روک دو", "بس")
+        val cancelPhrases = setOf("cancel", "stop", "rok do", "roko", "bas", "khatam karo", "chhor do", "ruko", "روک دو", "بس")
+        if (cancelPhrases.contains(text) || text == "stop" || text == "cancel") {
+            return ParsedCommand(
+                rawText = originalText,
+                intentType = IntentType.CANCEL_TASK,
+                confidence = 1.0f
+            )
+        }
+
         // 1. Check for Pending Confirmation (e.g. WhatsApp message confirmation)
         if (context?.pendingConfirmationCommand != null) {
             if (isNegativeResponse(text)) {
@@ -40,22 +50,25 @@ object CommandParser {
             }
         }
 
-        // 2. Check for System Controls (Torch, Volume, Settings)
+        // 2. Foreground App Contextual Commands
+        parseForegroundAppContext(text, originalText, context)?.let { return it }
+
+        // 3. Check for System Controls (Torch, Volume, Settings)
         parseSystemControl(text, originalText)?.let { return it }
 
-        // 3. Check for WhatsApp Messaging
+        // 4. Check for WhatsApp Messaging
         parseWhatsApp(text, originalText)?.let { return it }
 
-        // 4. Check for YouTube Search or Playback
+        // 5. Check for YouTube Search or Playback
         parseYouTube(text, originalText)?.let { return it }
 
-        // 5. Check for Web / Google Search
+        // 6. Check for Web / Google Search
         parseWebSearch(text, originalText)?.let { return it }
 
-        // 6. Check for Open Application
+        // 7. Check for Open Application
         parseOpenApp(text, originalText)?.let { return it }
 
-        // 7. Fallback: Conversational query / AI Chat
+        // 8. Fallback: Conversational query / AI Chat
         return ParsedCommand(
             rawText = originalText,
             intentType = IntentType.AI_CHAT,
@@ -102,6 +115,25 @@ object CommandParser {
 
             text == "open wifi" || text == "wifi kholo" ||
                     text == "wifi settings" -> SystemAction.OPEN_WIFI
+
+            text == "back" || text == "go back" || text == "wapas jao" ||
+                    text == "piche jao" || text == "peeche jao" -> SystemAction.NAV_BACK
+
+            text == "home" || text == "go home" || text == "home screen" ||
+                    text == "main screen" || text == "home screen pe jao" -> SystemAction.NAV_HOME
+
+            text == "recents" || text == "recent apps" || text == "recent tasks" ||
+                    text == "task switcher" -> SystemAction.NAV_RECENTS
+
+            text == "notifications" || text == "open notifications" ||
+                    text == "show notifications" || text == "notification panel" -> SystemAction.OPEN_NOTIFICATIONS
+
+            text == "screenshot" || text == "take screenshot" ||
+                    text == "capture screen" || text == "screenshot lo" -> SystemAction.TAKE_SCREENSHOT
+
+            text == "pause" || text == "pause video" || text == "pause song" ||
+                    text == "resume" || text == "play video" || text == "pause music" ||
+                    text == "video roko" || text == "video chalao" || text == "gana roko" -> SystemAction.MEDIA_PLAY_PAUSE
 
             else -> null
         }
@@ -328,6 +360,64 @@ object CommandParser {
                     targetApp = app,
                     confidence = 0.9f
                 )
+            }
+        }
+
+        return null
+    }
+
+    private fun parseForegroundAppContext(
+        text: String,
+        original: String,
+        context: ExecutionContext?
+    ): ParsedCommand? {
+        val activePkg = context?.activeForegroundPackage ?: return null
+
+        // 1. YouTube Contextual Commands
+        if (activePkg.equals("com.google.android.youtube", ignoreCase = true)) {
+            // Contextual Play
+            if (text == "play" || text == "ab play karo" || text == "play karo" ||
+                text == "chalao" || text == "chala do" || text == "pehla chalao" || text == "play this"
+            ) {
+                return ParsedCommand(
+                    rawText = original,
+                    intentType = IntentType.YOUTUBE_PLAY,
+                    query = context.activeQuery,
+                    confidence = 0.95f
+                )
+            }
+
+            // Contextual Search inside YouTube
+            if (text.startsWith("search ") || text.endsWith(" search karo") || text.endsWith(" dhoondo")) {
+                val query = text.removePrefix("search ")
+                    .removeSuffix(" search karo")
+                    .removeSuffix(" dhoondo")
+                    .trim()
+                if (query.isNotBlank()) {
+                    return ParsedCommand(
+                        rawText = original,
+                        intentType = IntentType.YOUTUBE_SEARCH,
+                        query = query,
+                        confidence = 0.95f
+                    )
+                }
+            }
+        }
+
+        // 2. Chrome / Browser Contextual Commands
+        if (activePkg.contains("chrome", ignoreCase = true) || activePkg.contains("browser", ignoreCase = true)) {
+            if (text.startsWith("search ") || text.endsWith(" search karo")) {
+                val query = text.removePrefix("search ")
+                    .removeSuffix(" search karo")
+                    .trim()
+                if (query.isNotBlank()) {
+                    return ParsedCommand(
+                        rawText = original,
+                        intentType = IntentType.SEARCH_WEB,
+                        query = query,
+                        confidence = 0.95f
+                    )
+                }
             }
         }
 

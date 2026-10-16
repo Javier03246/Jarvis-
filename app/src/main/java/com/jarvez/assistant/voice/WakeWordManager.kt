@@ -13,10 +13,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class WakeWordManager(
-    private val context: Context,
-    private val onWakeWordDetected: () -> Unit
+    context: Context,
+    private val onWakeWordDetected: (String?) -> Unit
 ) {
 
+    private val appContext = context.applicationContext
     private val scope = CoroutineScope(Dispatchers.Main)
     private var listeningJob: Job? = null
 
@@ -30,14 +31,15 @@ class WakeWordManager(
         _isWakeWordActive.value = true
 
         speechRecognizerManager = SpeechRecognizerManager(
-            context = context,
+            context = appContext,
             onCommandRecognized = { recognizedText ->
-                val lower = recognizedText.lowercase()
-                if (lower.contains("jarvez") || lower.contains("jarvis") || lower.contains("hey jarvez")) {
-                    Logger.i("WakeWordManager", "Wake word recognized: $recognizedText")
-                    onWakeWordDetected()
+                val lower = recognizedText.lowercase().trim()
+                if (lower.contains("jarvez") || lower.contains("jarvis")) {
+                    Logger.i("WakeWordManager", "Wake word recognized in: \"$recognizedText\"")
+                    // Clean out wake word prefix if user said command in one breath
+                    val command = extractCommandAfterWakeWord(recognizedText)
+                    onWakeWordDetected(command)
                 } else {
-                    // Schedule next wake-word listening loop
                     scheduleNextWakeListen()
                 }
             },
@@ -48,6 +50,21 @@ class WakeWordManager(
         )
 
         scheduleNextWakeListen()
+    }
+
+    private fun extractCommandAfterWakeWord(text: String): String? {
+        val lower = text.lowercase()
+        val wakeWords = listOf("hey jarvez", "hey jarvis", "ok jarvez", "ok jarvis", "jarvez", "jarvis")
+        for (w in wakeWords) {
+            val idx = lower.indexOf(w)
+            if (idx != -1) {
+                val remainder = text.substring(idx + w.length).trim()
+                if (remainder.isNotBlank()) {
+                    return remainder
+                }
+            }
+        }
+        return null
     }
 
     private fun scheduleNextWakeListen() {

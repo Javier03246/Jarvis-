@@ -9,5 +9,6 @@ enum class IntentType {
     SYSTEM_CONTROL,
     AI_CHAT,
     CONFIRMATION_RESPONSE,
+    CANCEL_TASK,
     UNKNOWN
 }

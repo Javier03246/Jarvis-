@@ -8,7 +8,13 @@ enum class SystemAction {
     VOLUME_MUTE,
     OPEN_SETTINGS,
     OPEN_BLUETOOTH,
-    OPEN_WIFI
+    OPEN_WIFI,
+    NAV_BACK,
+    NAV_HOME,
+    NAV_RECENTS,
+    OPEN_NOTIFICATIONS,
+    TAKE_SCREENSHOT,
+    MEDIA_PLAY_PAUSE
 }
 
 enum class ConfirmationType {
@@ -34,7 +40,9 @@ data class ParsedCommand(
 data class ExecutionContext(
     val lastIntent: IntentType? = null,
     val pendingConfirmationCommand: ParsedCommand? = null,
-    val activeQuery: String? = null
+    val activeQuery: String? = null,
+    val activeForegroundPackage: String? = null,
+    val activeForegroundAppName: String? = null
 )
 
 enum class MessageSender {
@@ -54,10 +62,14 @@ data class ChatMessage(
 )
 
 enum class AssistantState {
+    DISABLED,
+    STARTING,
     READY,
+    WAKE_LISTENING,
     LISTENING,
     THINKING,
     EXECUTING,
     SPEAKING,
-    ERROR
+    ERROR,
+    STOPPING
 }

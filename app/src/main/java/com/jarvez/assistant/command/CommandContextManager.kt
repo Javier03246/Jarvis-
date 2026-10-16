@@ -30,6 +30,13 @@ class CommandContextManager {
         )
     }
 
+    fun updateForegroundApp(packageName: String?, appName: String?) {
+        _contextState.value = _contextState.value.copy(
+            activeForegroundPackage = packageName,
+            activeForegroundAppName = appName
+        )
+    }
+
     fun getSnapshot(): ExecutionContext {
         return _contextState.value
     }

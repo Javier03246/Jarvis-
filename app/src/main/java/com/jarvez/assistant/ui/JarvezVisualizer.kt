@@ -93,12 +93,16 @@ fun JarvezVisualizer(
 
             // Determine active colors based on state
             val (coreColor, ringColor, glowColor) = when (state) {
+                AssistantState.DISABLED -> Triple(Color(0xFF4A5568), Color(0xFF2D3748), Color(0x224A5568))
+                AssistantState.STARTING -> Triple(Color(0xFF00B4D8), Color(0xFF0077B6), Color(0x3300B4D8))
                 AssistantState.READY -> Triple(Color(0xFF00E5FF), Color(0xFF00B4D8), Color(0x3300E5FF))
+                AssistantState.WAKE_LISTENING -> Triple(Color(0xFF00F5D4), Color(0xFF00BBF9), Color(0x4400F5D4))
                 AssistantState.LISTENING -> Triple(Color(0xFF00F5D4), Color(0xFF7000FF), Color(0x4400F5D4))
                 AssistantState.THINKING -> Triple(Color(0xFFFFB703), Color(0xFF00E5FF), Color(0x44FFB703))
                 AssistantState.EXECUTING -> Triple(Color(0xFF00F5D4), Color(0xFF38B000), Color(0x4400F5D4))
                 AssistantState.SPEAKING -> Triple(Color(0xFF3A86FF), Color(0xFF00F0FF), Color(0x443A86FF))
                 AssistantState.ERROR -> Triple(Color(0xFFFF0054), Color(0xFF9D0208), Color(0x44FF0054))
+                AssistantState.STOPPING -> Triple(Color(0xFFE0A96D), Color(0xFF772F1A), Color(0x33E0A96D))
             }
 
             // 1. Ambient Background Glow
@@ -132,6 +136,16 @@ fun JarvezVisualizer(
                     drawCircle(
                         color = coreColor.copy(alpha = 0.5f),
                         radius = baseRadius * 0.38f * reactiveScale,
+                        center = center,
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                }
+
+                AssistantState.WAKE_LISTENING -> {
+                    // Pulsing radar sweep ring for background wake-word listening
+                    drawCircle(
+                        color = coreColor.copy(alpha = 0.4f),
+                        radius = baseRadius * 0.5f * pulse,
                         center = center,
                         style = Stroke(width = 2.dp.toPx())
                     )

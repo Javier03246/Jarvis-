@@ -141,286 +141,77 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+import androidx.activity.compose.BackHandler
+import com.jarvez.assistant.core.JarvezAssistantEngine
+import com.jarvez.assistant.ui.FloatingAssistantManager
+
 class MainActivity : ComponentActivity() {
 
-    // Core Managers & Repositories
-    private lateinit var permissionManager: PermissionManager
-    private lateinit var networkManager: NetworkManager
-    private lateinit var secureStorage: SecureStorage
-    private lateinit var settingsRepository: SettingsRepository
-    private lateinit var conversationRepository: ConversationRepository
-    private lateinit var contextManager: CommandContextManager
-    private lateinit var appResolver: AppResolver
-    private lateinit var contactResolver: ContactResolver
-    private lateinit var appLauncher: AppLauncher
-    private lateinit var browserExecutor: BrowserExecutor
-    private lateinit var youTubeExecutor: YouTubeExecutor
-    private lateinit var whatsAppExecutor: WhatsAppExecutor
-    private lateinit var systemActionExecutor: SystemActionExecutor
-    private lateinit var verificationManager: VerificationManager
-    private lateinit var aiRepository: AIRepository
-    private lateinit var taskPlanner: TaskPlanner
-    private lateinit var taskExecutor: TaskExecutor
-    private lateinit var ttsManager: TtsManager
-    private lateinit var speechRecognizerManager: SpeechRecognizerManager
-    private lateinit var wakeWordManager: WakeWordManager
-
-    // Reactive State
-    private val assistantState = MutableStateFlow(AssistantState.READY)
-    private val stateStatusText = MutableStateFlow("JARVEZ ONLINE // READY")
+    private lateinit var engine: JarvezAssistantEngine
+    private lateinit var floatingManager: FloatingAssistantManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Initialize dependencies
-        permissionManager = PermissionManager(this)
-        networkManager = NetworkManager(this)
-        secureStorage = SecureStorage(this)
-        settingsRepository = SettingsRepository(this, secureStorage)
-        conversationRepository = ConversationRepository()
-        contextManager = CommandContextManager()
-        appResolver = AppResolver(this)
-        contactResolver = ContactResolver(this)
-        appLauncher = AppLauncher(this, appResolver)
-        browserExecutor = BrowserExecutor(this)
-        youTubeExecutor = YouTubeExecutor(this)
-        whatsAppExecutor = WhatsAppExecutor(this, contactResolver)
-        systemActionExecutor = SystemActionExecutor(this)
-        verificationManager = VerificationManager(this)
-        aiRepository = AIRepository(settingsRepository)
+        // Get unified engine singleton
+        engine = JarvezAssistantEngine.getInstance(this)
+        floatingManager = FloatingAssistantManager(this)
 
-        taskPlanner = TaskPlanner(
-            appLauncher = appLauncher,
-            appResolver = appResolver,
-            browserExecutor = browserExecutor,
-            youTubeExecutor = youTubeExecutor,
-            whatsAppExecutor = whatsAppExecutor,
-            systemActionExecutor = systemActionExecutor,
-            verificationManager = verificationManager,
-            aiRepository = aiRepository
-        )
-
-        taskExecutor = TaskExecutor()
-
-        // TTS setup
-        ttsManager = TtsManager(this) { isSpeaking ->
-            if (isSpeaking) {
-                assistantState.value = AssistantState.SPEAKING
-            } else if (assistantState.value == AssistantState.SPEAKING) {
-                assistantState.value = AssistantState.READY
-            }
+        // Start background assistant service only if audio permission is already granted
+        if (engine.permissionManager.hasRecordAudioPermission()) {
+            JarvezForegroundService.start(this)
         }
-
-        // Voice Speech Recognizer setup
-        speechRecognizerManager = SpeechRecognizerManager(
-            context = this,
-            onCommandRecognized = { text ->
-                // Voice input enters the EXACT SAME pipeline
-                processUserCommand(text, isVoice = true)
-            },
-            onListeningStateChanged = { listening ->
-                if (listening) {
-                    assistantState.value = AssistantState.LISTENING
-                    stateStatusText.value = "AUDIO SENSORS ACTIVE // LISTENING..."
-                } else if (assistantState.value == AssistantState.LISTENING) {
-                    assistantState.value = AssistantState.READY
-                    stateStatusText.value = "JARVEZ ONLINE // READY"
-                }
-            },
-            onErrorOccurred = { error ->
-                assistantState.value = AssistantState.ERROR
-                stateStatusText.value = "AUDIO ERROR: $error"
-            }
-        )
-
-        // Wake word setup
-        wakeWordManager = WakeWordManager(this) {
-            runOnUiThread {
-                Toast.makeText(this, "JARVEZ Wake Word Triggered", Toast.LENGTH_SHORT).show()
-                startVoiceListening()
-            }
-        }
-
-        // Add initial system greeting
-        conversationRepository.addMessage(
-            ChatMessage(
-                text = "JARVEZ initialized and standing by. Say 'Hey Jarvez', tap the microphone, or type any command in English, Urdu, or Roman Urdu.",
-                sender = MessageSender.JARVEZ
-            )
-        )
 
         setContent {
             JarvezTheme {
+                BackHandler {
+                    moveTaskToBack(true)
+                }
                 JarvezMainScreen()
             }
         }
     }
 
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // Do not destroy the activity or assistant session; send to background
+        moveTaskToBack(true)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        speechRecognizerManager.destroy()
-        wakeWordManager.stopWakeWordListening()
-        ttsManager.shutdown()
+        // Do NOT destroy engine or speech recognizer; JarvezForegroundService maintains background operation
+        Logger.i("MainActivity", "MainActivity destroyed/backgrounded; Background Assistant continues in Service")
     }
 
     /**
-     * UNIFIED COMMAND PIPELINE
-     * Typed text and microphone voice input pass through the EXACT SAME PIPELINE:
-     * Text -> CommandNormalizer -> CommandParser -> TaskPlanner -> TaskExecutor -> VerificationManager -> Response -> TTS
+     * UNIFIED COMMAND PIPELINE DELEGATION
+     * Typed text and voice commands both enter the single unified pipeline in JarvezAssistantEngine.
      */
     fun processUserCommand(rawCommandText: String, isVoice: Boolean = false) {
-        val trimmed = rawCommandText.trim()
-        if (trimmed.isEmpty()) return
-
-        val scope = kotlinx.coroutines.CoroutineScope(Dispatchers.Main)
-        scope.launch {
-            // Step 1: Add user message to conversation history
-            conversationRepository.addMessage(
-                ChatMessage(
-                    text = trimmed,
-                    sender = MessageSender.USER
-                )
-            )
-
-            // Step 2: Set Thinking state
-            assistantState.value = AssistantState.THINKING
-            stateStatusText.value = "PARSING COMMAND // ANALYZING INTENT..."
-
-            // Step 3: Command Normalization
-            val normalized = CommandNormalizer.normalize(trimmed)
-            Logger.i("MainActivity", "Normalized: \"${normalized.cleaned}\" (Original: \"$trimmed\")")
-
-            // Step 4: Check if answering pending confirmation
-            val currentContext = contextManager.getSnapshot()
-            val pending = currentContext.pendingConfirmationCommand
-
-            if (pending != null) {
-                val parsed = CommandParser.parse(normalized.cleaned, trimmed, currentContext)
-                if (parsed.intentType == IntentType.CONFIRMATION_RESPONSE) {
-                    contextManager.clearPendingConfirmation()
-                    conversationRepository.removePendingConfirmation()
-
-                    if (parsed.confirmationType == ConfirmationType.AFFIRMATIVE) {
-                        stateStatusText.value = "CONFIRMED // EXECUTING TASK..."
-                        executeCommandPlan(pending, isExplicitlyConfirmed = true)
-                    } else {
-                        val cancelMsg = "Action cancelled, sir."
-                        stateStatusText.value = "ACTION CANCELLED"
-                        assistantState.value = AssistantState.READY
-                        conversationRepository.addMessage(
-                            ChatMessage(text = cancelMsg, sender = MessageSender.JARVEZ)
-                        )
-                        ttsManager.speak(cancelMsg, settingsRepository.settingsState.value.preferredLanguage)
-                    }
-                    return@launch
-                }
-            }
-
-            // Step 5: Command Parsing (Offline rule-based first, with AI fallback)
-            val parsed = CommandParser.parse(normalized.cleaned, trimmed, currentContext)
-            contextManager.updateLastIntent(parsed.intentType, parsed.query)
-
-            // Step 6: Task Planning & Execution
-            executeCommandPlan(parsed, isExplicitlyConfirmed = false)
-        }
+        engine.processUserCommand(rawCommandText, isVoice)
     }
 
-    private suspend fun executeCommandPlan(parsed: ParsedCommand, isExplicitlyConfirmed: Boolean) {
-        val history = conversationRepository.getRecentHistory()
-        val plan = taskPlanner.planTask(parsed, history, isExplicitlyConfirmed)
-
-        // If confirmation is required before proceeding (e.g. WhatsApp message confirmation)
-        if (plan.requiresConfirmation) {
-            val prompt = plan.confirmationPrompt ?: "Confirmation required to proceed, sir."
-            contextManager.setPendingConfirmation(plan.command)
-            assistantState.value = AssistantState.READY
-            stateStatusText.value = "AWAITING CONFIRMATION"
-
-            conversationRepository.addMessage(
-                ChatMessage(
-                    text = prompt,
-                    sender = MessageSender.JARVEZ,
-                    isPendingConfirmation = true,
-                    pendingCommand = plan.command
-                )
-            )
-            ttsManager.speak(prompt, settingsRepository.settingsState.value.preferredLanguage)
-            return
-        }
-
-        // Step 7: Execute Plan
-        assistantState.value = AssistantState.EXECUTING
-        stateStatusText.value = "EXECUTING: ${plan.steps.firstOrNull()?.description ?: "Task in progress..."}"
-
-        val taskResult = taskExecutor.executePlan(plan) { stepDesc ->
-            stateStatusText.value = "EXECUTING: $stepDesc"
-        }
-
-        // Step 8: Response Handling and Verification Output
-        val responseText = when (taskResult) {
-            is TaskResult.Success -> {
-                assistantState.value = AssistantState.READY
-                stateStatusText.value = "TASK COMPLETED // READY"
-                taskResult.message
-            }
-            is TaskResult.Failure -> {
-                assistantState.value = AssistantState.ERROR
-                stateStatusText.value = "TASK FAILED // ERROR"
-                "I was unable to complete that action, sir. ${taskResult.reason}"
-            }
-            is TaskResult.RequiresConfirmation -> {
-                assistantState.value = AssistantState.READY
-                stateStatusText.value = "AWAITING CONFIRMATION"
-                taskResult.prompt
-            }
-            is TaskResult.RequiresPermission -> {
-                assistantState.value = AssistantState.ERROR
-                stateStatusText.value = "PERMISSION REQUIRED"
-                "Permission required: ${taskResult.explanation}"
-            }
-            is TaskResult.RequiresAccessibility -> {
-                assistantState.value = AssistantState.ERROR
-                stateStatusText.value = "ACCESSIBILITY SERVICE REQUIRED"
-                taskResult.message
-            }
-            is TaskResult.Cancelled -> {
-                assistantState.value = AssistantState.READY
-                stateStatusText.value = "TASK CANCELLED"
-                "Task cancelled, sir."
-            }
-        }
-
-        // Step 9: Add Response to transcript and synthesize via TTS
-        conversationRepository.addMessage(
-            ChatMessage(
-                text = responseText,
-                sender = MessageSender.JARVEZ,
-                intentType = parsed.intentType
-            )
-        )
-
-        ttsManager.speak(responseText, settingsRepository.settingsState.value.preferredLanguage)
-    }
-
-    private fun startVoiceListening() {
-        if (!permissionManager.hasRecordAudioPermission()) {
-            Toast.makeText(this, "Microphone permission is required for voice commands", Toast.LENGTH_SHORT).show()
-            return
-        }
-        ttsManager.stop()
-        speechRecognizerManager.startListening(settingsRepository.settingsState.value.preferredLanguage)
+    fun startVoiceListening() {
+        engine.startVoiceListening()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun JarvezMainScreen() {
-        val state by assistantState.collectAsState()
-        val statusText by stateStatusText.collectAsState()
-        val messages by conversationRepository.messages.collectAsState()
-        val rmsLevel by speechRecognizerManager.soundLevelRms.collectAsState()
-        val isExecuting by taskExecutor.isExecuting.collectAsState()
-        val settings by settingsRepository.settingsState.collectAsState()
+        val state by engine.assistantState.collectAsState()
+        val statusText by engine.stateStatusText.collectAsState()
+        val messages by engine.conversationRepository.messages.collectAsState()
+        val rmsLevel by engine.soundLevelRms.collectAsState()
+        val isExecuting by engine.taskExecutor.isExecuting.collectAsState()
+        val settings by engine.settingsRepository.settingsState.collectAsState()
+        val permissionManager = engine.permissionManager
+        val speechRecognizerManager = engine.speechRecognizerManager
+        val conversationRepository = engine.conversationRepository
+        val settingsRepository = engine.settingsRepository
+        val aiRepository = engine.aiRepository
+        val wakeWordManager = engine.wakeWordManager
 
         var typedInput by remember { mutableStateOf("") }
         var showSettingsDialog by remember { mutableStateOf(false) }
@@ -428,23 +219,35 @@ class MainActivity : ComponentActivity() {
         val coroutineScope = rememberCoroutineScope()
 
         // Permissions launcher
-        val audioPermissionLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { granted ->
-            if (granted) {
-                startVoiceListening()
+        val permissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
+            val micGranted = permissions[Manifest.permission.RECORD_AUDIO] == true
+            if (micGranted) {
+                JarvezForegroundService.start(this@MainActivity)
+                if (settings.isHandsFreeEnabled) {
+                    engine.startHandsFree()
+                }
             } else {
-                Toast.makeText(this, "Microphone permission is needed for speech", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Microphone permission is required for voice commands", Toast.LENGTH_SHORT).show()
             }
         }
 
-        val notificationsLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { /* handled */ }
-
         LaunchedEffect(Unit) {
+            val permissionsToRequest = mutableListOf<String>()
+            if (!permissionManager.hasRecordAudioPermission()) {
+                permissionsToRequest.add(Manifest.permission.RECORD_AUDIO)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !permissionManager.hasNotificationPermission()) {
-                notificationsLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (permissionsToRequest.isNotEmpty()) {
+                permissionLauncher.launch(permissionsToRequest.toTypedArray())
+            } else {
+                JarvezForegroundService.start(this@MainActivity)
+                if (settings.isHandsFreeEnabled) {
+                    engine.startHandsFree()
+                }
             }
         }
 
@@ -478,10 +281,14 @@ class MainActivity : ComponentActivity() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // Telemetry & Status HUD Header
+                val foregroundApp by engine.foregroundAppTracker.currentAppName.collectAsState()
                 JarvezTelemetryHeader(
                     state = state,
                     statusText = statusText,
-                    isAccessibilityActive = permissionManager.isAccessibilityEnabled()
+                    isAccessibilityActive = permissionManager.isAccessibilityEnabled(),
+                    isHandsFreeActive = settings.isHandsFreeEnabled,
+                    currentAppName = foregroundApp,
+                    hasMicPermission = permissionManager.hasRecordAudioPermission()
                 )
 
                 // Central Arc Reactor Visualizer
@@ -496,12 +303,12 @@ class MainActivity : ComponentActivity() {
                         rmsLevel = rmsLevel,
                         modifier = Modifier.clickable {
                             if (state == AssistantState.LISTENING) {
-                                speechRecognizerManager.stopListening()
+                                engine.stopVoiceListening()
                             } else {
                                 if (permissionManager.hasRecordAudioPermission()) {
                                     startVoiceListening()
                                 } else {
-                                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
                                 }
                             }
                         }
@@ -528,22 +335,10 @@ class MainActivity : ComponentActivity() {
                         ChatBubbleItem(
                             message = msg,
                             onConfirm = {
-                                msg.pendingCommand?.let { cmd ->
-                                    coroutineScope.launch {
-                                        executeCommandPlan(cmd, isExplicitlyConfirmed = true)
-                                        conversationRepository.removePendingConfirmation()
-                                        contextManager.clearPendingConfirmation()
-                                    }
-                                }
+                                processUserCommand("yes")
                             },
                             onCancel = {
-                                conversationRepository.removePendingConfirmation()
-                                contextManager.clearPendingConfirmation()
-                                val cancelMsg = "Cancelled by user."
-                                conversationRepository.addMessage(
-                                    ChatMessage(text = cancelMsg, sender = MessageSender.JARVEZ)
-                                )
-                                ttsManager.speak(cancelMsg)
+                                processUserCommand("cancel")
                             }
                         )
                     }
@@ -562,21 +357,20 @@ class MainActivity : ComponentActivity() {
                     },
                     onMicClicked = {
                         if (state == AssistantState.LISTENING) {
-                            speechRecognizerManager.stopListening()
+                            engine.stopVoiceListening()
                         } else {
                             if (permissionManager.hasRecordAudioPermission()) {
                                 startVoiceListening()
                             } else {
-                                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
                             }
                         }
                     },
                     onCancelClicked = {
-                        taskExecutor.cancelActiveTask()
-                        speechRecognizerManager.stopListening()
-                        ttsManager.stop()
-                        assistantState.value = AssistantState.READY
-                        stateStatusText.value = "TASK ABORTED // READY"
+                        engine.taskExecutor.cancelActiveTask()
+                        engine.stopVoiceListening()
+                        engine.ttsManager.stop()
+                        engine.updateState(AssistantState.READY, "TASK ABORTED // READY")
                     },
                     isListening = state == AssistantState.LISTENING,
                     isExecuting = isExecuting
@@ -602,10 +396,11 @@ class MainActivity : ComponentActivity() {
                     },
                     onWakeWordToggled = { enabled ->
                         settingsRepository.setWakeWordEnabled(enabled)
+                        settingsRepository.setHandsFreeEnabled(enabled)
                         if (enabled) {
-                            wakeWordManager.startWakeWordListening()
+                            engine.startHandsFree()
                         } else {
-                            wakeWordManager.stopWakeWordListening()
+                            engine.stopHandsFree()
                         }
                     },
                     onConfirmWhatsAppToggled = { enabled ->
@@ -620,6 +415,23 @@ class MainActivity : ComponentActivity() {
                             JarvezForegroundService.start(this@MainActivity)
                         } else {
                             JarvezForegroundService.stop(this@MainActivity)
+                        }
+                    },
+                    isFloatingBubbleActive = floatingManager.canDrawOverlay(),
+                    onFloatingBubbleToggled = { active ->
+                        if (active) {
+                            if (floatingManager.canDrawOverlay()) {
+                                floatingManager.showFloatingBubble()
+                            } else {
+                                Toast.makeText(this@MainActivity, "Please grant overlay permission for floating assistant bubble", Toast.LENGTH_LONG).show()
+                                val intent = Intent(
+                                    android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    android.net.Uri.parse("package:$packageName")
+                                )
+                                startActivity(intent)
+                            }
+                        } else {
+                            floatingManager.removeFloatingBubble()
                         }
                     }
                 )
@@ -689,16 +501,23 @@ class MainActivity : ComponentActivity() {
     fun JarvezTelemetryHeader(
         state: AssistantState,
         statusText: String,
-        isAccessibilityActive: Boolean
+        isAccessibilityActive: Boolean,
+        isHandsFreeActive: Boolean,
+        currentAppName: String?,
+        hasMicPermission: Boolean
     ) {
         val stateColor by animateColorAsState(
             targetValue = when (state) {
+                AssistantState.DISABLED -> Color.Gray
+                AssistantState.STARTING -> JarvezBlue
                 AssistantState.READY -> JarvezCyan
+                AssistantState.WAKE_LISTENING -> JarvezGreen
                 AssistantState.LISTENING -> JarvezGreen
                 AssistantState.THINKING -> JarvezAmber
                 AssistantState.EXECUTING -> JarvezCyan
                 AssistantState.SPEAKING -> JarvezBlue
                 AssistantState.ERROR -> JarvezCrimson
+                AssistantState.STOPPING -> JarvezAmber
             },
             label = "stateColor"
         )
@@ -713,8 +532,10 @@ class MainActivity : ComponentActivity() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                // Top Telemetry Row: State + Hands-Free Badge + Accessibility Badge
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -731,21 +552,56 @@ class MainActivity : ComponentActivity() {
                         Text(
                             text = state.name,
                             color = stateColor,
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
                     }
 
+                    // Hands-Free ON / OFF Badge
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (isHandsFreeActive) JarvezGreen.copy(alpha = 0.2f) else JarvezSurfaceVariant,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (isHandsFreeActive) JarvezGreen else JarvezBorder)
+                    ) {
+                        Text(
+                            text = if (isHandsFreeActive) "HANDS-FREE: ON" else "HANDS-FREE: OFF",
+                            color = if (isHandsFreeActive) JarvezGreen else JarvezSubtext,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+
                     Text(
-                        text = if (isAccessibilityActive) "ACCESSIBILITY: ACTIVE" else "ACCESSIBILITY: STANDBY",
+                        text = if (isAccessibilityActive) "ACC: ACTIVE" else "ACC: STANDBY",
                         color = if (isAccessibilityActive) JarvezGreen else JarvezAmber,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace
                     )
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                // Sub-Telemetry Row: Current Active Foreground App + Microphone Permission Status
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "APP: ${currentAppName ?: "JARVEZ"}",
+                        color = JarvezSubtext,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+
+                    Text(
+                        text = if (hasMicPermission) "MIC: GRANTED" else "MIC: DENIED",
+                        color = if (hasMicPermission) JarvezCyan else JarvezCrimson,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
 
                 Text(
                     text = statusText,
@@ -1009,10 +865,12 @@ class MainActivity : ComponentActivity() {
         onWakeWordToggled: (Boolean) -> Unit,
         onConfirmWhatsAppToggled: (Boolean) -> Unit,
         onLanguageSelected: (String) -> Unit,
-        onBackgroundServiceToggled: (Boolean) -> Unit
+        onBackgroundServiceToggled: (Boolean) -> Unit,
+        isFloatingBubbleActive: Boolean,
+        onFloatingBubbleToggled: (Boolean) -> Unit
     ) {
-        var apiKeyInput by remember { mutableStateOf(settingsRepository.getEffectiveApiKey()) }
-        var isTestingConnection by remember { mutableStateOf(false) }
+        var apiKeyInput by remember { mutableStateOf<String>(engine.settingsRepository.getEffectiveApiKey()) }
+        var isTestingConnection by remember { mutableStateOf<Boolean>(false) }
         var connectionTestResult by remember { mutableStateOf<String?>(null) }
         val context = LocalContext.current
 
@@ -1178,6 +1036,25 @@ class MainActivity : ComponentActivity() {
                             Switch(
                                 checked = settings.isBackgroundServiceActive,
                                 onCheckedChange = onBackgroundServiceToggled,
+                                colors = SwitchDefaults.colors(checkedThumbColor = JarvezCyan, checkedTrackColor = JarvezBlue)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Floating Assistant Overlay Bubble
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Floating Assistant Bubble", color = JarvezText, fontSize = 13.sp)
+                                Text("On-screen floating mic over other apps", color = JarvezSubtext, fontSize = 11.sp)
+                            }
+                            Switch(
+                                checked = isFloatingBubbleActive,
+                                onCheckedChange = onFloatingBubbleToggled,
                                 colors = SwitchDefaults.colors(checkedThumbColor = JarvezCyan, checkedTrackColor = JarvezBlue)
                             )
                         }

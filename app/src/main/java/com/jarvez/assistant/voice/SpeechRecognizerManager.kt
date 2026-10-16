@@ -7,18 +7,22 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import com.jarvez.assistant.util.Logger
+import android.os.Handler
+import android.os.Looper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
 class SpeechRecognizerManager(
-    private val context: Context,
+    context: Context,
     private val onCommandRecognized: (String) -> Unit,
     private val onListeningStateChanged: (Boolean) -> Unit,
     private val onErrorOccurred: (String) -> Unit
 ) {
 
+    private val appContext = context.applicationContext
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var speechRecognizer: SpeechRecognizer? = null
 
     private val _isListening = MutableStateFlow(false)
@@ -102,68 +106,74 @@ class SpeechRecognizerManager(
     }
 
     fun startListening(languagePreference: String = "auto") {
-        if (_isListening.value) {
-            stopListening()
-        }
-
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            onErrorOccurred("Speech recognition service is not available on this device.")
-            return
-        }
-
-        try {
-            speechRecognizer?.destroy()
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
-                setRecognitionListener(recognitionListener)
+        mainHandler.post {
+            if (_isListening.value) {
+                stopListening()
             }
 
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
+                onErrorOccurred("Speech recognition service is not available on this device.")
+                return@post
+            }
 
-                when (languagePreference) {
-                    "ur" -> {
-                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ur-PK")
-                    }
-                    "en" -> {
-                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-                    }
-                    else -> {
-                        // Multilingual / Default
-                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
-                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US,ur-PK")
+            try {
+                speechRecognizer?.destroy()
+                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(appContext).apply {
+                    setRecognitionListener(recognitionListener)
+                }
+
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+
+                    when (languagePreference) {
+                        "ur" -> {
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ur-PK")
+                        }
+                        "en" -> {
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+                        }
+                        else -> {
+                            // Multilingual / Default
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US,ur-PK")
+                        }
                     }
                 }
-            }
 
-            speechRecognizer?.startListening(intent)
-        } catch (e: Exception) {
-            Logger.e("SpeechRecognizer", "Failed to start speech recognizer: ${e.message}", e)
-            _isListening.value = false
-            onListeningStateChanged(false)
-            onErrorOccurred("Failed to initialize microphone: ${e.message}")
+                speechRecognizer?.startListening(intent)
+            } catch (e: Exception) {
+                Logger.e("SpeechRecognizer", "Failed to start speech recognizer: ${e.message}", e)
+                _isListening.value = false
+                onListeningStateChanged(false)
+                onErrorOccurred("Failed to initialize microphone: ${e.message}")
+            }
         }
     }
 
     fun stopListening() {
-        try {
-            speechRecognizer?.stopListening()
-        } catch (e: Exception) {
-            Logger.w("SpeechRecognizer", "Error stopping recognizer: ${e.message}")
-        } finally {
-            _isListening.value = false
-            onListeningStateChanged(false)
-            _soundLevelRms.value = 0f
+        mainHandler.post {
+            try {
+                speechRecognizer?.stopListening()
+            } catch (e: Exception) {
+                Logger.w("SpeechRecognizer", "Error stopping recognizer: ${e.message}")
+            } finally {
+                _isListening.value = false
+                onListeningStateChanged(false)
+                _soundLevelRms.value = 0f
+            }
         }
     }
 
     fun destroy() {
-        try {
-            speechRecognizer?.destroy()
-            speechRecognizer = null
-        } catch (e: Exception) {
-            Logger.w("SpeechRecognizer", "Error destroying speech recognizer: ${e.message}")
+        mainHandler.post {
+            try {
+                speechRecognizer?.destroy()
+                speechRecognizer = null
+            } catch (e: Exception) {
+                Logger.w("SpeechRecognizer", "Error destroying speech recognizer: ${e.message}")
+            }
         }
     }
 }

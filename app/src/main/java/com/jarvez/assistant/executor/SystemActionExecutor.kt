@@ -26,6 +26,44 @@ class SystemActionExecutor(private val context: Context) {
             SystemAction.OPEN_SETTINGS -> launchSettingIntent(Settings.ACTION_SETTINGS, "Settings")
             SystemAction.OPEN_BLUETOOTH -> launchSettingIntent(Settings.ACTION_BLUETOOTH_SETTINGS, "Bluetooth Settings")
             SystemAction.OPEN_WIFI -> launchSettingIntent(Settings.ACTION_WIFI_SETTINGS, "Wi-Fi Settings")
+            SystemAction.NAV_BACK -> performAccessibilityGlobal(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK, "Going back")
+            SystemAction.NAV_HOME -> performAccessibilityGlobal(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME, "Navigating to Home")
+            SystemAction.NAV_RECENTS -> performAccessibilityGlobal(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_RECENTS, "Opening Recent Apps")
+            SystemAction.OPEN_NOTIFICATIONS -> performAccessibilityGlobal(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS, "Opening Notifications")
+            SystemAction.TAKE_SCREENSHOT -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    performAccessibilityGlobal(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT, "Capturing screenshot")
+                } else {
+                    TaskResult.Failure("Screenshots via Accessibility require Android 9 or higher.")
+                }
+            }
+            SystemAction.MEDIA_PLAY_PAUSE -> toggleMediaPlayPause()
+        }
+    }
+
+    private fun performAccessibilityGlobal(globalAction: Int, successMessage: String): TaskResult {
+        val service = com.jarvez.assistant.accessibility.JarvezAccessibilityService.instance
+        if (service != null) {
+            val performed = service.performGlobalAction(globalAction)
+            return if (performed) {
+                TaskResult.Success(successMessage)
+            } else {
+                TaskResult.Failure("System action could not be performed.")
+            }
+        }
+        return TaskResult.RequiresAccessibility("Accessibility Service is required to perform system navigation actions.")
+    }
+
+    private fun toggleMediaPlayPause(): TaskResult {
+        return try {
+            val eventDown = android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            val eventUp = android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            audioManager.dispatchMediaKeyEvent(eventDown)
+            audioManager.dispatchMediaKeyEvent(eventUp)
+            TaskResult.Success("Toggled media playback")
+        } catch (e: Exception) {
+            Logger.e("SystemActionExecutor", "Media toggle error: ${e.message}")
+            TaskResult.Failure("Could not toggle media: ${e.message}")
         }
     }
 

@@ -7,10 +7,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class JarvezSettings(
-    val isWakeWordEnabled: Boolean = false,
+    val isHandsFreeEnabled: Boolean = true,
+    val isWakeWordEnabled: Boolean = true,
     val isConfirmWhatsAppEnabled: Boolean = true,
     val preferredLanguage: String = "auto", // auto, en, ur
-    val isBackgroundServiceActive: Boolean = false,
+    val isBackgroundServiceActive: Boolean = true,
     val hasCustomApiKey: Boolean = false
 )
 
@@ -24,19 +25,26 @@ class SettingsRepository(
     val settingsState: StateFlow<JarvezSettings> = _settingsState.asStateFlow()
 
     private fun loadSettings(): JarvezSettings {
-        val wakeWord = prefs.getBoolean("wake_word_enabled", false)
+        val handsFree = prefs.getBoolean("hands_free_enabled", true)
+        val wakeWord = prefs.getBoolean("wake_word_enabled", true)
         val confirmWhatsApp = prefs.getBoolean("confirm_whatsapp_enabled", true)
         val language = prefs.getString("preferred_language", "auto") ?: "auto"
-        val bgService = prefs.getBoolean("bg_service_active", false)
+        val bgService = prefs.getBoolean("bg_service_active", true)
         val hasCustomKey = !secureStorage.getDecryptedString(SecureStorage.KEY_GEMINI_API_KEY).isNullOrBlank()
 
         return JarvezSettings(
+            isHandsFreeEnabled = handsFree,
             isWakeWordEnabled = wakeWord,
             isConfirmWhatsAppEnabled = confirmWhatsApp,
             preferredLanguage = language,
             isBackgroundServiceActive = bgService,
             hasCustomApiKey = hasCustomKey
         )
+    }
+
+    fun setHandsFreeEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("hands_free_enabled", enabled).apply()
+        _settingsState.value = _settingsState.value.copy(isHandsFreeEnabled = enabled)
     }
 
     fun setWakeWordEnabled(enabled: Boolean) {

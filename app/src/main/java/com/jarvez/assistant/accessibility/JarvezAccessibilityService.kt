@@ -1,8 +1,6 @@
 package com.jarvez.assistant.accessibility
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.AccessibilityServiceInfo
-import android.content.Intent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.jarvez.assistant.util.Logger
@@ -27,6 +25,7 @@ class JarvezAccessibilityService : AccessibilityService() {
 
         if (!pkg.isNullOrBlank()) {
             _currentPackageName.value = pkg
+            onPackageChangedListener?.invoke(pkg, cls)
         }
         if (!cls.isNullOrBlank()) {
             _currentClassName.value = cls
@@ -70,6 +69,8 @@ class JarvezAccessibilityService : AccessibilityService() {
 
         private val _currentClassName = MutableStateFlow<String?>(null)
         val currentClassName: StateFlow<String?> = _currentClassName.asStateFlow()
+
+        var onPackageChangedListener: ((String, String?) -> Unit)? = null
 
         fun isConnected(): Boolean = instance != null
     }

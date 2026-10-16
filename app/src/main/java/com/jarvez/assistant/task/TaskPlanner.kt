@@ -176,6 +176,14 @@ class TaskPlanner(
                 // Handled in pipeline
             }
 
+            IntentType.CANCEL_TASK -> {
+                steps.add(
+                    TaskStep("cancel_task", "Cancelling current operation") {
+                        TaskResult.Cancelled
+                    }
+                )
+            }
+
             IntentType.UNKNOWN -> {
                 steps.add(
                     TaskStep("unknown", "Unknown command") {
